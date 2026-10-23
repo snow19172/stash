@@ -75,7 +75,7 @@ const logLevels = ["Trace", "Debug", "Info", "Warning", "Error"];
 export const SettingsLogsPanel: React.FC = () => {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const { data, error } = useLoggingSubscribe();
-  const [logLevel, setLogLevel] = useState<string>("Info");
+  const [logLevel, setLogLevel] = useState<string>("Debug");
   const intl = useIntl();
 
   useEffect(() => {
