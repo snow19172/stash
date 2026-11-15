@@ -109,7 +109,9 @@ const AppContainer: React.FC<React.PropsWithChildren<unknown>> = PatchFunction(
   }
 ) as React.FC;
 
-const MainContainer: React.FC = ({ children }) => {
+const MainContainer: React.FC<React.PropsWithChildren<unknown>> = ({
+  children,
+}) => {
   // use optional here because the configuration may have be loading or errored
   const { configuration } = useConfigurationContextOptional() || {};
   const { sfwContentMode } = configuration?.interface || {};
@@ -312,6 +314,7 @@ export const App: React.FC = () => {
 
   const title = config.data?.configuration.ui.title || "Stash";
   const titleProps = makeTitleProps(title);
+  const htmlAttributes = { lang: language };
 
   if (!messages) {
     return null;
@@ -324,6 +327,7 @@ export const App: React.FC = () => {
         messages={messages}
         formats={intlFormats}
       >
+        <Helmet htmlAttributes={htmlAttributes} />
         <MainContainer>{content}</MainContainer>
       </IntlProvider>
     );
@@ -370,7 +374,10 @@ export const App: React.FC = () => {
                   <LightboxProvider>
                     <ManualProvider>
                       <InteractiveProvider>
-                        <Helmet {...titleProps} />
+                        <Helmet
+                          {...titleProps}
+                          htmlAttributes={htmlAttributes}
+                        />
                         {maybeRenderNavbar()}
                         <MainContainer>{renderContent()}</MainContainer>
                       </InteractiveProvider>

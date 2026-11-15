@@ -34,7 +34,7 @@ const (
 	cacheSizeEnv = "STASH_SQLITE_CACHE_SIZE"
 )
 
-var appSchemaVersion uint = 85
+var appSchemaVersion uint = 86
 
 //go:embed migrations/*.sql
 var migrationsBox embed.FS
@@ -134,6 +134,13 @@ func (db *Database) SetBlobStoreOptions(options BlobStoreOptions) {
 // Ready returns an error if the database is not ready to begin transactions.
 func (db *Database) Ready() error {
 	if db.readDB == nil || db.writeDB == nil {
+		// schemaVersion is only set once Open has read an existing database
+		if db.schemaVersion != 0 && db.needsMigration() {
+			return &MigrationNeededError{
+				CurrentSchemaVersion:  db.schemaVersion,
+				RequiredSchemaVersion: appSchemaVersion,
+			}
+		}
 		return ErrDatabaseNotInitialized
 	}
 
@@ -236,7 +243,8 @@ func (db *Database) Close() error {
 
 func (db *Database) open(disableForeignKeys bool, writable bool) (*sqlx.DB, error) {
 	// https://github.com/mattn/go-sqlite3
-	url := "file:" + db.dbPath + "?_journal=WAL&_sync=NORMAL&_busy_timeout=50"
+	// 5s timeout is the default.
+	url := "file:" + db.dbPath + "?_journal=WAL&_sync=NORMAL&_busy_timeout=5000"
 	if !disableForeignKeys {
 		url += "&_fk=true"
 	}

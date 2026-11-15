@@ -76,9 +76,9 @@ func authenticateHandler() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c := config.GetInstance()
-			ctx := r.Context()
 
 			r = session.SetLocalRequest(r)
+			ctx := r.Context()
 
 			// Check for signed media requests
 			if username, ok := authenticateSignedRequest(r); ok {
@@ -113,6 +113,7 @@ func authenticateHandler() func(http.Handler) http.Handler {
 				}
 
 				if err := checkAllowPublicWithoutAuth(c, requestIP); err != nil {
+					logger.Debugf("Denying access: %v", err)
 					httpError(w, r, "Access denied: Stash cannot be accessed from public IPs when authentication is not configured", http.StatusForbidden)
 					return
 				}
