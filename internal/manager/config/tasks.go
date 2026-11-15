@@ -1,5 +1,7 @@
 package config
 
+import "github.com/stashapp/stash/internal/identify"
+
 type ScanMetadataOptions struct {
 	// Forces a rescan on files even if they have not changed
 	Rescan bool `json:"rescan"`
@@ -28,4 +30,12 @@ type AutoTagMetadataOptions struct {
 	Studios []string `json:"studios"`
 	// IDs of tags to tag files with, or "*" for all
 	Tags []string `json:"tags"`
+}
+
+type AutoIdentifyLibraryConfig struct {
+	Path                  string             `json:"path"`
+	AutoScan              bool               `json:"autoScan"`
+	AutoIdentify          bool               `json:"autoIdentify"`
+	AutoIdentifyOverwrite bool               `json:"autoIdentifyOverwrite"`
+	Sources               []*identify.Source `json:"sources"`
 }

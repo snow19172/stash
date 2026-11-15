@@ -19,9 +19,13 @@ var testCtx = context.Background()
 type mockSceneScraper struct {
 	errIDs  []int
 	results map[int][]*models.ScrapedScene
+	calls   *int
 }
 
 func (s mockSceneScraper) ScrapeScenes(ctx context.Context, sceneID int) ([]*models.ScrapedScene, error) {
+	if s.calls != nil {
+		(*s.calls)++
+	}
 	if slices.Contains(s.errIDs, sceneID) {
 		return nil, errors.New("scrape scene error")
 	}
@@ -32,6 +36,104 @@ type mockHookExecutor struct {
 }
 
 func (s mockHookExecutor) ExecuteSceneUpdatePostHooks(ctx context.Context, input models.SceneUpdateInput, inputFields []string) {
+}
+
+func TestMergeScrapedSceneFieldsUsesSourcePriority(t *testing.T) {
+	firstTitle := "first source title"
+	secondTitle := "second source title"
+	secondCode := "source-code"
+
+	target := &models.ScrapedScene{Title: &firstTitle}
+	mergeScrapedSceneFields(target, &models.ScrapedScene{
+		Title: &secondTitle,
+		Code:  &secondCode,
+	}, true)
+
+	assert.Equal(t, firstTitle, *target.Title)
+	assert.Equal(t, secondCode, *target.Code)
+}
+
+func TestSceneIdentifierScrapeSceneMergesSourceResultsByPriority(t *testing.T) {
+	firstTitle := "first source title"
+	secondTitle := "second source title"
+	code := "source-code"
+	sceneID := 42
+	firstCalls := 0
+	secondCalls := 0
+
+	identifier := SceneIdentifier{
+		MergeSources: true,
+		Sources: []ScraperSource{
+			{
+				Name: "first source",
+				Scraper: mockSceneScraper{
+					calls: &firstCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &firstTitle}},
+					},
+				},
+			},
+			{
+				Name: "second source",
+				Scraper: mockSceneScraper{
+					calls: &secondCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &secondTitle, Code: &code}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.Equal(t, firstTitle, *result.result.Title)
+	assert.Equal(t, code, *result.result.Code)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
+	assert.Equal(t, []string{"first source", "second source"}, []string{result.sources[0].Name, result.sources[1].Name})
+}
+
+func TestSceneIdentifierMergeSourcesContinuesAfterMultipleMatches(t *testing.T) {
+	sceneID := 42
+	firstCalls := 0
+	secondCalls := 0
+	skipMultipleMatches := true
+	firstTitle := "ambiguous source title"
+	secondTitle := "fallback source title"
+
+	identifier := SceneIdentifier{
+		MergeSources:   true,
+		DefaultOptions: &MetadataOptions{SkipMultipleMatches: &skipMultipleMatches},
+		Sources: []ScraperSource{
+			{
+				Name: "ambiguous source",
+				Scraper: mockSceneScraper{
+					calls: &firstCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &firstTitle}, {Title: &firstTitle}},
+					},
+				},
+			},
+			{
+				Name: "fallback source",
+				Scraper: mockSceneScraper{
+					calls: &secondCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &secondTitle}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, secondTitle, *result.result.Title)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
+	assert.Equal(t, []string{"fallback source"}, []string{result.source.Name})
 }
 
 func TestSceneIdentifier_Identify(t *testing.T) {
@@ -433,10 +535,11 @@ func Test_getScenePartial(t *testing.T) {
 	setOrganised := true
 
 	type args struct {
-		scene        *models.Scene
-		scraped      *models.ScrapedScene
-		fieldOptions map[string]*FieldOptions
-		setOrganized bool
+		scene           *models.Scene
+		scraped         *models.ScrapedScene
+		fieldOptions    map[string]*FieldOptions
+		setOrganized    bool
+		onlyFillMissing bool
 	}
 	tests := []struct {
 		name string
@@ -450,6 +553,7 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				overwriteAll,
 				false,
+				false,
 			},
 			postPartial,
 		},
@@ -460,6 +564,7 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				ignoreAll,
 				false,
+				false,
 			},
 			models.ScenePartial{},
 		},
@@ -469,6 +574,7 @@ func Test_getScenePartial(t *testing.T) {
 				originalScene,
 				scrapedScene,
 				mergeAll,
+				false,
 				false,
 			},
 			models.ScenePartial{
@@ -485,6 +591,7 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				mergeAll,
 				false,
+				false,
 			},
 			postPartialMerge,
 		},
@@ -494,6 +601,7 @@ func Test_getScenePartial(t *testing.T) {
 				originalScene,
 				scrapedUnchangedScene,
 				overwriteAll,
+				false,
 				false,
 			},
 			models.ScenePartial{},
@@ -505,6 +613,7 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedUnchangedScene,
 				overwriteAll,
 				true,
+				false,
 			},
 			models.ScenePartial{
 				Organized: models.NewOptionalBool(setOrganised),
@@ -517,13 +626,25 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedUnchangedScene,
 				overwriteAll,
 				true,
+				false,
+			},
+			models.ScenePartial{},
+		},
+		{
+			"auto-identify preserves existing values",
+			args{
+				originalScene,
+				scrapedScene,
+				mergeAll,
+				false,
+				true,
 			},
 			models.ScenePartial{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getScenePartial(tt.args.scene, tt.args.scraped, tt.args.fieldOptions, tt.args.setOrganized)
+			got := getScenePartial(tt.args.scene, tt.args.scraped, tt.args.fieldOptions, tt.args.setOrganized, tt.args.onlyFillMissing)
 
 			assert.Equal(t, tt.want, got)
 		})

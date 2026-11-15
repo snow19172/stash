@@ -14,6 +14,7 @@ import (
 	"github.com/stashapp/stash/internal/manager"
 	"github.com/stashapp/stash/internal/manager/config"
 	"github.com/stashapp/stash/internal/manager/task"
+
 	"github.com/stashapp/stash/pkg/ffmpeg"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/logger"
@@ -90,7 +91,18 @@ func (r *mutationResolver) ConfigureGeneral(ctx context.Context, input ConfigGen
 	// #4709 - allow stash paths even if they do not exist, so that users may configure stash
 	// for disconnected drives or network storage.
 	existingPaths := c.GetStashPaths()
+	refreshFileWatcher := false
 	if input.Stashes != nil {
+		if len(input.Stashes) != len(existingPaths) {
+			refreshFileWatcher = true
+		} else {
+			for index, stash := range input.Stashes {
+				if filepath.Clean(stash.Path) != filepath.Clean(existingPaths[index].Path) {
+					refreshFileWatcher = true
+					break
+				}
+			}
+		}
 		for _, s := range input.Stashes {
 			// Only validate existence of new paths
 			isNew := true
@@ -113,6 +125,18 @@ func (r *mutationResolver) ConfigureGeneral(ctx context.Context, input ConfigGen
 			}
 		}
 		c.SetInterface(config.Stash, input.Stashes)
+	}
+	if input.AutoIdentifyLibraries != nil && autoScanConfigurationChanged(
+		c.GetAutoIdentifyLibraries(),
+		input.AutoIdentifyLibraries,
+	) {
+		refreshFileWatcher = true
+	}
+	if input.AutoIdentifyLibraries != nil {
+		if err := validateAutoIdentifyLibraries(input.AutoIdentifyLibraries); err != nil {
+			return makeConfigGeneralResult(), err
+		}
+		c.SetInterface(config.AutoIdentifyLibraries, input.AutoIdentifyLibraries)
 	}
 
 	checkConfigOverride := func(key string) error {
@@ -452,6 +476,9 @@ func (r *mutationResolver) ConfigureGeneral(ctx context.Context, input ConfigGen
 	}
 
 	manager.GetInstance().RefreshConfig()
+	if refreshFileWatcher {
+		manager.GetInstance().RefreshFileWatcher()
+	}
 	if refreshScraperCache {
 		manager.GetInstance().RefreshScraperCache()
 	}
@@ -478,6 +505,77 @@ func (r *mutationResolver) ConfigureGeneral(ctx context.Context, input ConfigGen
 	}
 
 	return makeConfigGeneralResult(), nil
+}
+
+func autoScanConfigurationChanged(old, next []*config.AutoIdentifyLibraryConfig) bool {
+	oldByPath := make(map[string]bool)
+	for _, library := range old {
+		if library != nil && library.AutoScan {
+			oldByPath[filepath.Clean(library.Path)] = true
+		}
+	}
+	nextByPath := make(map[string]bool)
+	for _, library := range next {
+		if library != nil && library.AutoScan {
+			nextByPath[filepath.Clean(library.Path)] = true
+		}
+	}
+	if len(oldByPath) != len(nextByPath) {
+		return true
+	}
+	for path := range oldByPath {
+		if !nextByPath[path] {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAutoIdentifyLibraries(libraries []*config.AutoIdentifyLibraryConfig) error {
+	paths := make(map[string]bool, len(libraries))
+	for _, library := range libraries {
+		if library == nil || strings.TrimSpace(library.Path) == "" {
+			return errors.New("auto-identification library path must not be empty")
+		}
+		path := filepath.Clean(library.Path)
+		if paths[path] {
+			return fmt.Errorf("duplicate auto-identification configuration for library path %q", library.Path)
+		}
+		paths[path] = true
+
+		sources := make(map[string]bool, len(library.Sources))
+		for _, source := range library.Sources {
+			if source == nil || source.Source == nil {
+				return fmt.Errorf("auto-identification source for library path %q is required", library.Path)
+			}
+			input := source.Source
+			count := 0
+			key := ""
+			if input.ScraperID != nil && *input.ScraperID != "" {
+				count++
+				key = "scraper:" + *input.ScraperID
+			}
+			if input.StashBoxEndpoint != nil && *input.StashBoxEndpoint != "" {
+				count++
+				key = "stashbox:" + *input.StashBoxEndpoint
+			}
+			if input.StashBoxIndex != nil {
+				count++
+				if *input.StashBoxIndex < 0 {
+					return fmt.Errorf("invalid Stash-Box index %d for library path %q", *input.StashBoxIndex, library.Path)
+				}
+				key = fmt.Sprintf("stashbox-index:%d", *input.StashBoxIndex)
+			}
+			if count != 1 {
+				return fmt.Errorf("auto-identification source for library path %q must specify exactly one scraper or Stash-Box", library.Path)
+			}
+			if sources[key] {
+				return fmt.Errorf("duplicate auto-identification source %q for library path %q", key, library.Path)
+			}
+			sources[key] = true
+		}
+	}
+	return nil
 }
 
 func (r *mutationResolver) ConfigureInterface(ctx context.Context, input ConfigInterfaceInput) (*ConfigInterfaceResult, error) {

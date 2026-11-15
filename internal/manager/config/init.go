@@ -79,6 +79,7 @@ func Initialize() (*Config, error) {
 
 	if !cfg.isNewSystem {
 		cfg.setExistingSystemDefaults()
+		cfg.migrateLegacyAutoIdentifySettings()
 
 		err := cfg.SetInitialConfig()
 		if err != nil {
@@ -102,6 +103,48 @@ func Initialize() (*Config, error) {
 
 	instance = cfg
 	return instance, nil
+}
+
+func (i *Config) migrateLegacyAutoIdentifySettings() {
+	const (
+		legacyAutoWatch             = "auto_watch"
+		legacyAutoIdentify          = "auto_identify"
+		legacyAutoIdentifyOverwrite = "auto_identify_overwrite"
+	)
+	autoScan := i.getBool(legacyAutoWatch)
+	autoIdentify := i.getBool(legacyAutoIdentify)
+	overwrite := i.getBool(legacyAutoIdentifyOverwrite)
+	if !autoScan && !autoIdentify && !overwrite {
+		return
+	}
+
+	libraries := i.GetAutoIdentifyLibraries()
+	byPath := make(map[string]*AutoIdentifyLibraryConfig, len(libraries))
+	for _, library := range libraries {
+		if library != nil {
+			byPath[filepath.Clean(library.Path)] = library
+		}
+	}
+	for _, stash := range i.GetStashPaths() {
+		if stash == nil {
+			continue
+		}
+		path := filepath.Clean(stash.Path)
+		library := byPath[path]
+		if library == nil {
+			library = &AutoIdentifyLibraryConfig{Path: stash.Path}
+			libraries = append(libraries, library)
+			byPath[path] = library
+		}
+		library.AutoScan = autoScan
+		library.AutoIdentify = autoIdentify
+		library.AutoIdentifyOverwrite = overwrite
+	}
+
+	i.SetInterface(AutoIdentifyLibraries, libraries)
+	i.SetBool(legacyAutoWatch, false)
+	i.SetBool(legacyAutoIdentify, false)
+	i.SetBool(legacyAutoIdentifyOverwrite, false)
 }
 
 // Called by tests to initialize an empty config

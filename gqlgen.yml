@@ -68,6 +68,10 @@ models:
     model: github.com/stashapp/stash/internal/manager/config.ConfigDisableDropdownCreate
   ScanMetadataOptions:
     model:  github.com/stashapp/stash/internal/manager/config.ScanMetadataOptions
+  AutoIdentifyLibraryConfig:
+    model: github.com/stashapp/stash/internal/manager/config.AutoIdentifyLibraryConfig
+  AutoIdentifyLibraryConfigInput:
+    model: github.com/stashapp/stash/internal/manager/config.AutoIdentifyLibraryConfig
   ScanFileInput:
     model:  github.com/stashapp/stash/internal/manager.ScanFileInput
   CleanGeneratedInput:

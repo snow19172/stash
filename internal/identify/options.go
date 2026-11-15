@@ -16,7 +16,9 @@ type Source struct {
 }
 
 type Options struct {
-	// An ordered list of sources to identify items with. Only the first source that finds a match is used.
+	// An ordered list of sources to identify items with. By default, only the
+	// first source that finds a match is used; callers may opt into merging all
+	// source results.
 	Sources []*Source `json:"sources"`
 	// Options defined here override the configured defaults
 	Options *MetadataOptions `json:"options"`

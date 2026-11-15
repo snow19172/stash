@@ -49,3 +49,32 @@ func TestConfig_initialisePublicWhitelist(t *testing.T) {
 		assert.Error(t, i.initialisePublicWhitelist(), bad)
 	}
 }
+
+func TestConfig_migrateLegacyAutoIdentifySettings(t *testing.T) {
+	i := InitializeEmpty()
+	i.SetInterface(Stash, StashConfigs{{Path: "/existing"}})
+	i.SetInterface(AutoIdentifyLibraries, []*AutoIdentifyLibraryConfig{
+		{Path: "/existing"},
+	})
+	i.SetBool("auto_watch", true)
+	i.SetBool("auto_identify", true)
+	i.SetBool("auto_identify_overwrite", true)
+
+	i.migrateLegacyAutoIdentifySettings()
+
+	libraries := i.GetAutoIdentifyLibraries()
+	assert.Len(t, libraries, 1)
+	assert.True(t, libraries[0].AutoScan)
+	assert.True(t, libraries[0].AutoIdentify)
+	assert.True(t, libraries[0].AutoIdentifyOverwrite)
+	assert.False(t, i.getBool("auto_watch"))
+	assert.False(t, i.getBool("auto_identify"))
+	assert.False(t, i.getBool("auto_identify_overwrite"))
+
+	i.SetInterface(Stash, StashConfigs{
+		{Path: "/existing"},
+		{Path: "/new"},
+	})
+	i.migrateLegacyAutoIdentifySettings()
+	assert.Len(t, i.GetAutoIdentifyLibraries(), 1)
+}

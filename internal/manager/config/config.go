@@ -34,17 +34,18 @@ import (
 )
 
 const (
-	Stash               = "stash"
-	Cache               = "cache"
-	BackupDirectoryPath = "backup_directory_path"
-	Generated           = "generated"
-	Metadata            = "metadata"
-	BlobsPath           = "blobs_path"
-	Downloads           = "downloads"
-	ApiKey              = "api_key"
-	Username            = "username"
-	Password            = "password"
-	MaxSessionAge       = "max_session_age"
+	Stash                 = "stash"
+	AutoIdentifyLibraries = "auto_identify_libraries"
+	Cache                 = "cache"
+	BackupDirectoryPath   = "backup_directory_path"
+	Generated             = "generated"
+	Metadata              = "metadata"
+	BlobsPath             = "blobs_path"
+	Downloads             = "downloads"
+	ApiKey                = "api_key"
+	Username              = "username"
+	Password              = "password"
+	MaxSessionAge         = "max_session_age"
 
 	SignedURLExpiry        = "signed_url_expiry"
 	signedURLExpiryDefault = 60 * 60 * 4 // 4 hours in seconds
@@ -885,6 +886,22 @@ func (i *Config) GetVideoFileNamingAlgorithm() models.HashAlgorithm {
 
 func (i *Config) GetSequentialScanning() bool {
 	return i.getBool(SequentialScanning)
+}
+
+func (i *Config) GetAutoIdentifyLibraries() []*AutoIdentifyLibraryConfig {
+	i.RLock()
+	defer i.RUnlock()
+
+	if !i.main.Exists(AutoIdentifyLibraries) {
+		return []*AutoIdentifyLibraryConfig{}
+	}
+
+	var ret []*AutoIdentifyLibraryConfig
+	if err := i.forKey(AutoIdentifyLibraries).Unmarshal(AutoIdentifyLibraries, &ret); err != nil {
+		return nil
+	}
+
+	return ret
 }
 
 func (i *Config) GetGalleryCoverRegex() string {
