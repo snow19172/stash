@@ -900,6 +900,7 @@ func (i *Config) GetAutoIdentifyLibraries() []*AutoIdentifyLibraryConfig {
 	if err := i.forKey(AutoIdentifyLibraries).Unmarshal(AutoIdentifyLibraries, &ret); err != nil {
 		return nil
 	}
+	migrateAutoIdentifyOverwrite(ret)
 
 	return ret
 }

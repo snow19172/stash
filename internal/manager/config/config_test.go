@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	"github.com/stashapp/stash/internal/identify"
+	"github.com/stashapp/stash/pkg/scraper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,9 +54,15 @@ func TestConfig_initialisePublicWhitelist(t *testing.T) {
 
 func TestConfig_migrateLegacyAutoIdentifySettings(t *testing.T) {
 	i := InitializeEmpty()
+	scraperID := "test-scraper"
 	i.SetInterface(Stash, StashConfigs{{Path: "/existing"}})
 	i.SetInterface(AutoIdentifyLibraries, []*AutoIdentifyLibraryConfig{
-		{Path: "/existing"},
+		{
+			Path: "/existing",
+			Sources: []*identify.Source{
+				{Source: &scraper.Source{ScraperID: &scraperID}},
+			},
+		},
 	})
 	i.SetBool("auto_watch", true)
 	i.SetBool("auto_identify", true)
@@ -66,7 +74,8 @@ func TestConfig_migrateLegacyAutoIdentifySettings(t *testing.T) {
 	assert.Len(t, libraries, 1)
 	assert.True(t, libraries[0].AutoScan)
 	assert.True(t, libraries[0].AutoIdentify)
-	assert.True(t, libraries[0].AutoIdentifyOverwrite)
+	assert.False(t, libraries[0].AutoIdentifyOverwrite)
+	assert.Equal(t, identify.FieldStrategyOverwrite, libraries[0].Sources[0].Options.FieldOptions[0].Strategy)
 	assert.False(t, i.getBool("auto_watch"))
 	assert.False(t, i.getBool("auto_identify"))
 	assert.False(t, i.getBool("auto_identify_overwrite"))

@@ -354,7 +354,7 @@ input AutoIdentifyLibraryConfigInput {
   path: String!
   autoScan: Boolean!
   autoIdentify: Boolean!
-  autoIdentifyOverwrite: Boolean!
+  ignoreOrganizedScenes: Boolean!
   sources: [IdentifySourceInput!]!
 }
 
@@ -362,7 +362,7 @@ type AutoIdentifyLibraryConfig {
   path: String!
   autoScan: Boolean!
   autoIdentify: Boolean!
-  autoIdentifyOverwrite: Boolean!
+  ignoreOrganizedScenes: Boolean!
   sources: [IdentifySource!]!
 }
 

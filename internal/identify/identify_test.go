@@ -60,12 +60,23 @@ func TestSceneIdentifierScrapeSceneMergesSourceResultsByPriority(t *testing.T) {
 	sceneID := 42
 	firstCalls := 0
 	secondCalls := 0
+	firstOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyMerge},
+		},
+	}
+	secondOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "code", Strategy: FieldStrategyOverwrite},
+		},
+	}
 
 	identifier := SceneIdentifier{
 		MergeSources: true,
 		Sources: []ScraperSource{
 			{
-				Name: "first source",
+				Name:    "first source",
+				Options: firstOptions,
 				Scraper: mockSceneScraper{
 					calls: &firstCalls,
 					results: map[int][]*models.ScrapedScene{
@@ -74,7 +85,8 @@ func TestSceneIdentifierScrapeSceneMergesSourceResultsByPriority(t *testing.T) {
 				},
 			},
 			{
-				Name: "second source",
+				Name:    "second source",
+				Options: secondOptions,
 				Scraper: mockSceneScraper{
 					calls: &secondCalls,
 					results: map[int][]*models.ScrapedScene{
@@ -92,6 +104,10 @@ func TestSceneIdentifierScrapeSceneMergesSourceResultsByPriority(t *testing.T) {
 	assert.Equal(t, 1, firstCalls)
 	assert.Equal(t, 1, secondCalls)
 	assert.Equal(t, []string{"first source", "second source"}, []string{result.sources[0].Name, result.sources[1].Name})
+	assert.Equal(t, "second source", result.fieldSource["code"].Name)
+	fieldOptions := identifier.getResultFieldOptions(result)
+	assert.Equal(t, FieldStrategyMerge, fieldOptions["title"].Strategy)
+	assert.Equal(t, FieldStrategyOverwrite, fieldOptions["code"].Strategy)
 }
 
 func TestSceneIdentifierMergeSourcesContinuesAfterMultipleMatches(t *testing.T) {
@@ -134,6 +150,75 @@ func TestSceneIdentifierMergeSourcesContinuesAfterMultipleMatches(t *testing.T) 
 	assert.Equal(t, 1, firstCalls)
 	assert.Equal(t, 1, secondCalls)
 	assert.Equal(t, []string{"fallback source"}, []string{result.source.Name})
+}
+
+func TestSceneIdentifierUsesPerSourceFieldOptionsBeforeDefaults(t *testing.T) {
+	firstSourceOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyIgnore},
+		},
+	}
+	secondSourceOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "code", Strategy: FieldStrategyOverwrite},
+		},
+	}
+	defaultOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyMerge},
+			{Field: "code", Strategy: FieldStrategyMerge},
+		},
+	}
+	identifier := SceneIdentifier{DefaultOptions: defaultOptions}
+
+	got := identifier.getResultFieldOptions(&scrapeResult{
+		source: ScraperSource{Options: firstSourceOptions},
+		fieldSource: map[string]ScraperSource{
+			"title": {Options: firstSourceOptions},
+			"code":  {Options: secondSourceOptions},
+		},
+	})
+
+	assert.Equal(t, FieldStrategyIgnore, got["title"].Strategy)
+	assert.Equal(t, FieldStrategyOverwrite, got["code"].Strategy)
+}
+
+func TestSceneIdentifierMergeSourcesSkipsIgnoredFields(t *testing.T) {
+	sceneID := 42
+	ignoredTitle := "ignored source title"
+	fallbackTitle := "fallback source title"
+	ignoreTitle := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyIgnore},
+		},
+	}
+	identifier := SceneIdentifier{
+		MergeSources: true,
+		Sources: []ScraperSource{
+			{
+				Name:    "ignored source",
+				Options: ignoreTitle,
+				Scraper: mockSceneScraper{
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &ignoredTitle}},
+					},
+				},
+			},
+			{
+				Name: "fallback source",
+				Scraper: mockSceneScraper{
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &fallbackTitle}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.Equal(t, fallbackTitle, *result.result.Title)
+	assert.Equal(t, "fallback source", result.fieldSource["title"].Name)
 }
 
 func TestSceneIdentifier_Identify(t *testing.T) {
@@ -535,11 +620,10 @@ func Test_getScenePartial(t *testing.T) {
 	setOrganised := true
 
 	type args struct {
-		scene           *models.Scene
-		scraped         *models.ScrapedScene
-		fieldOptions    map[string]*FieldOptions
-		setOrganized    bool
-		onlyFillMissing bool
+		scene        *models.Scene
+		scraped      *models.ScrapedScene
+		fieldOptions map[string]*FieldOptions
+		setOrganized bool
 	}
 	tests := []struct {
 		name string
@@ -553,7 +637,6 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				overwriteAll,
 				false,
-				false,
 			},
 			postPartial,
 		},
@@ -564,7 +647,6 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				ignoreAll,
 				false,
-				false,
 			},
 			models.ScenePartial{},
 		},
@@ -574,7 +656,6 @@ func Test_getScenePartial(t *testing.T) {
 				originalScene,
 				scrapedScene,
 				mergeAll,
-				false,
 				false,
 			},
 			models.ScenePartial{
@@ -591,7 +672,6 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedScene,
 				mergeAll,
 				false,
-				false,
 			},
 			postPartialMerge,
 		},
@@ -601,7 +681,6 @@ func Test_getScenePartial(t *testing.T) {
 				originalScene,
 				scrapedUnchangedScene,
 				overwriteAll,
-				false,
 				false,
 			},
 			models.ScenePartial{},
@@ -613,7 +692,6 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedUnchangedScene,
 				overwriteAll,
 				true,
-				false,
 			},
 			models.ScenePartial{
 				Organized: models.NewOptionalBool(setOrganised),
@@ -626,25 +704,13 @@ func Test_getScenePartial(t *testing.T) {
 				scrapedUnchangedScene,
 				overwriteAll,
 				true,
-				false,
-			},
-			models.ScenePartial{},
-		},
-		{
-			"auto-identify preserves existing values",
-			args{
-				originalScene,
-				scrapedScene,
-				mergeAll,
-				false,
-				true,
 			},
 			models.ScenePartial{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getScenePartial(tt.args.scene, tt.args.scraped, tt.args.fieldOptions, tt.args.setOrganized, tt.args.onlyFillMissing)
+			got := getScenePartial(tt.args.scene, tt.args.scraped, tt.args.fieldOptions, tt.args.setOrganized)
 
 			assert.Equal(t, tt.want, got)
 		})

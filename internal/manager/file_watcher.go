@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -531,6 +532,14 @@ func (s *Manager) autoIdentifyScannedFile(ctx context.Context, progress *job.Pro
 	if len(scenes) == 0 {
 		return nil
 	}
+	if rule.IgnoreOrganizedScenes {
+		scenes = slices.DeleteFunc(scenes, func(scene *models.Scene) bool {
+			return !shouldAutoIdentifyScene(scene, true)
+		})
+	}
+	if len(scenes) == 0 {
+		return nil
+	}
 
 	return s.executeAutoIdentify(ctx, progress, rule, identify.Options{
 		SceneIDs: []string{strconv.Itoa(scenes[0].ID)},
@@ -651,6 +660,9 @@ func (s *Manager) identifyScannedVideos(ctx context.Context, progress *job.Progr
 				return fmt.Errorf("finding scene for scanned video %q: %w", video.path, err)
 			}
 			for _, scene := range scenes {
+				if !shouldAutoIdentifyScene(scene, target.library.IgnoreOrganizedScenes) {
+					continue
+				}
 				sceneID := strconv.Itoa(scene.ID)
 				if !sceneIDSet[sceneID] {
 					sceneIDSet[sceneID] = true
@@ -670,23 +682,22 @@ func (s *Manager) identifyScannedVideos(ctx context.Context, progress *job.Progr
 	return nil
 }
 
+func shouldAutoIdentifyScene(scene *models.Scene, ignoreOrganized bool) bool {
+	return scene != nil && (!ignoreOrganized || !scene.Organized)
+}
+
 func (s *Manager) executeAutoIdentify(ctx context.Context, progress *job.Progress, library *config.AutoIdentifyLibraryConfig, input identify.Options) error {
 	input.Sources = library.Sources
-	input.Options = autoIdentifyMetadataOptions(library.AutoIdentifyOverwrite)
+	input.Options = autoIdentifyMetadataOptions()
 	j := CreateIdentifyJob(input)
 	j.MergeSources = true
-	j.OnlyFillMissing = !library.AutoIdentifyOverwrite
+	j.OnlyFillMissing = true
 	return j.Execute(ctx, progress)
 }
 
-func autoIdentifyMetadataOptions(overwrite bool) *identify.MetadataOptions {
-	strategy := identify.FieldStrategyMerge
-	if overwrite {
-		strategy = identify.FieldStrategyOverwrite
-	}
-
+func autoIdentifyMetadataOptions() *identify.MetadataOptions {
 	fields := []string{
-		"title", "code", "date", "production_date", "director", "details",
+		"title", "code", "date", "production_date", "director", "details", "cover_image",
 		"url", "studio", "performers", "tags", "stash_ids",
 	}
 	options := &identify.MetadataOptions{
@@ -699,7 +710,7 @@ func autoIdentifyMetadataOptions(overwrite bool) *identify.MetadataOptions {
 	for _, field := range fields {
 		fieldOptions := &identify.FieldOptions{
 			Field:    field,
-			Strategy: strategy,
+			Strategy: identify.FieldStrategyMerge,
 		}
 		if field == "studio" || field == "performers" || field == "tags" {
 			fieldOptions.CreateMissing = new(bool)

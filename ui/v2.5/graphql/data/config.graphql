@@ -8,7 +8,7 @@ fragment ConfigGeneralData on ConfigGeneralResult {
     path
     autoScan
     autoIdentify
-    autoIdentifyOverwrite
+    ignoreOrganizedScenes
     sources {
       source {
         ...ScraperSourceData

@@ -6,7 +6,45 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/stashapp/stash/pkg/models"
 )
+
+func TestShouldAutoIdentifySceneHonorsIgnoreOrganized(t *testing.T) {
+	tests := []struct {
+		name            string
+		scene           *models.Scene
+		ignoreOrganized bool
+		want            bool
+	}{
+		{
+			name:            "organized scenes remain included by default",
+			scene:           &models.Scene{Organized: true},
+			ignoreOrganized: false,
+			want:            true,
+		},
+		{
+			name:            "organized scenes can be ignored",
+			scene:           &models.Scene{Organized: true},
+			ignoreOrganized: true,
+			want:            false,
+		},
+		{
+			name:            "unorganized scenes remain included",
+			scene:           &models.Scene{},
+			ignoreOrganized: true,
+			want:            true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAutoIdentifyScene(tt.scene, tt.ignoreOrganized); got != tt.want {
+				t.Fatalf("shouldAutoIdentifyScene() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestQueueWatchedFileDeduplicatesAndReschedulesChanges(t *testing.T) {
 	ctx := context.Background()

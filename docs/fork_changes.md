@@ -75,3 +75,14 @@ entries using the same dated, task-based format.
   changes to a file while it is pending trigger a follow-up scan.
 - Identification debug logs now report each source's result count, and source
   errors name the configured source.
+
+### Task 6: Per-library identification options
+
+- Added a per-library **Ignore organized scenes** setting. It defaults off to
+  preserve current behavior and applies to automatic identification after both
+  watcher and manual scans.
+- Added an options editor for every configured identification source, reusing
+  the identify task's field strategies and scraper options.
+- Moved overwrite behavior from a library-wide toggle to each source's field
+  strategies, including cover images. Existing library overwrite settings are
+  migrated to per-source `OVERWRITE` strategies.

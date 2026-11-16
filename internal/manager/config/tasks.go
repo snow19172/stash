@@ -36,6 +36,44 @@ type AutoIdentifyLibraryConfig struct {
 	Path                  string             `json:"path"`
 	AutoScan              bool               `json:"autoScan"`
 	AutoIdentify          bool               `json:"autoIdentify"`
-	AutoIdentifyOverwrite bool               `json:"autoIdentifyOverwrite"`
+	IgnoreOrganizedScenes bool               `json:"ignoreOrganizedScenes"`
+	AutoIdentifyOverwrite bool               `json:"autoIdentifyOverwrite,omitempty"`
 	Sources               []*identify.Source `json:"sources"`
+}
+
+func migrateAutoIdentifyOverwrite(libraries []*AutoIdentifyLibraryConfig) {
+	fields := []string{
+		"title", "code", "date", "production_date", "director", "details",
+		"url", "cover_image", "studio", "performers", "tags", "stash_ids",
+	}
+
+	for _, library := range libraries {
+		if library == nil || !library.AutoIdentifyOverwrite {
+			continue
+		}
+		for _, source := range library.Sources {
+			if source == nil {
+				continue
+			}
+			if source.Options == nil {
+				source.Options = &identify.MetadataOptions{}
+			}
+
+			fieldOptions := make(map[string]*identify.FieldOptions, len(fields))
+			for _, option := range source.Options.FieldOptions {
+				if option != nil {
+					fieldOptions[option.Field] = option
+				}
+			}
+			for _, field := range fields {
+				option := fieldOptions[field]
+				if option == nil {
+					option = &identify.FieldOptions{Field: field}
+					source.Options.FieldOptions = append(source.Options.FieldOptions, option)
+				}
+				option.Strategy = identify.FieldStrategyOverwrite
+			}
+		}
+		library.AutoIdentifyOverwrite = false
+	}
 }

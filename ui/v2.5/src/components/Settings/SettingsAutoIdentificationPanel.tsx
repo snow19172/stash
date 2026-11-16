@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Form, ListGroup } from "react-bootstrap";
+import { Alert, Button, Collapse, Form, ListGroup } from "react-bootstrap";
+import { faCog } from "@fortawesome/free-solid-svg-icons";
 import { FormattedMessage, useIntl } from "react-intl";
 import * as GQL from "src/core/generated-graphql";
 import { useListSceneScrapers } from "src/core/StashService";
+import { Icon } from "src/components/Shared/Icon";
+import { IScraperSource } from "src/components/Dialogs/IdentifyDialog/constants";
+import { OptionsEditor } from "src/components/Dialogs/IdentifyDialog/Options";
 import { BooleanSetting, Setting } from "./Inputs";
 import { SettingSection } from "./SettingSection";
 import { useSettings } from "./context";
@@ -19,6 +23,56 @@ function sourceKey(source: GQL.ScraperSourceInput) {
   return "";
 }
 
+function sourceOptionsInput(
+  options?:
+    | GQL.Maybe<GQL.IdentifyMetadataOptions>
+    | GQL.InputMaybe<GQL.IdentifyMetadataOptionsInput>
+): GQL.IdentifyMetadataOptionsInput | undefined {
+  if (!options) return undefined;
+  return {
+    fieldOptions: options.fieldOptions?.map((field) => ({
+      field: field.field,
+      strategy: field.strategy,
+      createMissing: field.createMissing ?? undefined,
+    })),
+    setCoverImage: options.setCoverImage ?? undefined,
+    setOrganized: options.setOrganized ?? undefined,
+    includeMalePerformers: options.includeMalePerformers ?? undefined,
+    performerGenders: options.performerGenders ?? undefined,
+    skipMultipleMatches: options.skipMultipleMatches ?? undefined,
+    skipMultipleMatchTag: options.skipMultipleMatchTag ?? undefined,
+    skipSingleNamePerformers: options.skipSingleNamePerformers ?? undefined,
+    skipSingleNamePerformerTag: options.skipSingleNamePerformerTag ?? undefined,
+  };
+}
+
+function getDefaultAutoIdentifyOptions(): GQL.IdentifyMetadataOptionsInput {
+  const fields = [
+    "title",
+    "code",
+    "date",
+    "production_date",
+    "director",
+    "details",
+    "cover_image",
+    "url",
+    "studio",
+    "performers",
+    "tags",
+    "stash_ids",
+  ];
+  return {
+    fieldOptions: fields.map((field) => ({
+      field,
+      strategy: GQL.IdentifyFieldStrategy.Merge,
+      createMissing: ["studio", "performers", "tags"].includes(field),
+    })),
+    setCoverImage: true,
+    skipMultipleMatches: true,
+    skipSingleNamePerformers: true,
+  };
+}
+
 export const SettingsAutoIdentificationPanel: React.FC = () => {
   const intl = useIntl();
   const { general, defaults, ui, saveGeneral } = useSettings();
@@ -27,6 +81,10 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
   const rules = general.autoIdentifyLibraries ?? [];
   const [selectedPath, setSelectedPath] = useState(libraries[0]?.path ?? "");
   const [newSource, setNewSource] = useState("");
+  const [editingSourceIndex, setEditingSourceIndex] = useState<number | null>(
+    null
+  );
+  const [editingField, setEditingField] = useState(false);
 
   useEffect(() => {
     if (!libraries.some((library) => library.path === selectedPath)) {
@@ -59,6 +117,7 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
         scraper_id: item.source.scraper_id ?? undefined,
         stash_box_endpoint: item.source.stash_box_endpoint ?? undefined,
       },
+      options: sourceOptionsInput(item.options ?? undefined),
     })
   );
   const selectedSourceIDs = sources.map((item) => sourceKey(item.source));
@@ -72,7 +131,7 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
       path: selectedPath,
       autoScan: rule?.autoScan ?? false,
       autoIdentify: rule?.autoIdentify ?? false,
-      autoIdentifyOverwrite: rule?.autoIdentifyOverwrite ?? false,
+      ignoreOrganizedScenes: rule?.ignoreOrganizedScenes ?? false,
       sources,
       ...updated,
     };
@@ -93,6 +152,18 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
     const target = index + direction;
     [next[index], next[target]] = [next[target], next[index]];
     saveLibrary({ sources: next });
+    setEditingSourceIndex(null);
+  }
+
+  function updateSourceOptions(
+    index: number,
+    options: GQL.IdentifyMetadataOptionsInput
+  ) {
+    saveLibrary({
+      sources: sources.map((source, sourceIndex) =>
+        sourceIndex === index ? { ...source, options } : source
+      ),
+    });
   }
 
   const scanDefaults =
@@ -116,7 +187,10 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
           className="input-control"
           value={selectedPath}
           disabled={libraries.length === 0}
-          onChange={(event) => setSelectedPath(event.currentTarget.value)}
+          onChange={(event) => {
+            setSelectedPath(event.currentTarget.value);
+            setEditingSourceIndex(null);
+          }}
         >
           {libraries.map((library) => (
             <option key={library.path} value={library.path}>
@@ -144,11 +218,11 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
           />
           {rule?.autoIdentify && (
             <BooleanSetting
-              id="library-auto-identify-overwrite"
-              headingID="config.library.auto_identify_overwrite"
-              subHeadingID="config.library.auto_identify_overwrite_description"
-              checked={rule.autoIdentifyOverwrite ?? false}
-              onChange={(v) => saveLibrary({ autoIdentifyOverwrite: v })}
+              id="library-ignore-organized-scenes"
+              headingID="config.library.ignore_organized_scenes"
+              subHeadingID="config.library.ignore_organized_scenes_description"
+              checked={rule.ignoreOrganizedScenes ?? false}
+              onChange={(v) => saveLibrary({ ignoreOrganizedScenes: v })}
             />
           )}
 
@@ -182,51 +256,89 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
                   const choice = availableSources.find(
                     (source) => source.id === sourceKey(item.source)
                   );
+                  const sourceForOptions: IScraperSource = {
+                    id: sourceKey(item.source),
+                    displayName: choice?.name ?? sourceKey(item.source),
+                    scraper_id: item.source.scraper_id ?? undefined,
+                    stash_box_endpoint:
+                      item.source.stash_box_endpoint ?? undefined,
+                    options: item.options ?? undefined,
+                  };
                   return (
                     <ListGroup.Item
                       as="li"
                       key={sourceKey(item.source)}
-                      className="d-flex justify-content-between align-items-center bg-dark text-light border-secondary"
+                      className="bg-dark text-light border-secondary"
                     >
-                      <span>
-                        <FormattedMessage id="config.library.auto_identify_selected_source" />
-                        {": "}
-                        <strong>
-                          {choice?.name ?? sourceKey(item.source)}
-                        </strong>
-                      </span>
-                      <span>
-                        <Button
-                          className="minimal"
-                          disabled={index === 0}
-                          aria-label={intl.formatMessage({
-                            id: "config.library.move_source_up",
-                          })}
-                          onClick={() => moveSource(index, -1)}
-                        >
-                          ↑
-                        </Button>
-                        <Button
-                          className="minimal"
-                          disabled={index === sources.length - 1}
-                          aria-label={intl.formatMessage({
-                            id: "config.library.move_source_down",
-                          })}
-                          onClick={() => moveSource(index, 1)}
-                        >
-                          ↓
-                        </Button>
-                        <Button
-                          className="minimal text-danger"
-                          onClick={() =>
-                            saveLibrary({
-                              sources: sources.filter((_, i) => i !== index),
-                            })
-                          }
-                        >
-                          <FormattedMessage id="actions.remove" />
-                        </Button>
-                      </span>
+                      <div className="d-flex justify-content-between align-items-center">
+                        <span>
+                          <FormattedMessage id="config.library.auto_identify_selected_source" />
+                          {": "}
+                          <strong>
+                            {choice?.name ?? sourceKey(item.source)}
+                          </strong>
+                        </span>
+                        <span>
+                          <Button
+                            className="minimal"
+                            aria-label={intl.formatMessage({
+                              id: "config.library.edit_source_options",
+                            })}
+                            aria-expanded={editingSourceIndex === index}
+                            onClick={() =>
+                              setEditingSourceIndex(
+                                editingSourceIndex === index ? null : index
+                              )
+                            }
+                          >
+                            <Icon icon={faCog} />
+                          </Button>
+                          <Button
+                            className="minimal"
+                            disabled={index === 0}
+                            aria-label={intl.formatMessage({
+                              id: "config.library.move_source_up",
+                            })}
+                            onClick={() => moveSource(index, -1)}
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            className="minimal"
+                            disabled={index === sources.length - 1}
+                            aria-label={intl.formatMessage({
+                              id: "config.library.move_source_down",
+                            })}
+                            onClick={() => moveSource(index, 1)}
+                          >
+                            ↓
+                          </Button>
+                          <Button
+                            className="minimal text-danger"
+                            onClick={() => {
+                              saveLibrary({
+                                sources: sources.filter((_, i) => i !== index),
+                              });
+                              setEditingSourceIndex(null);
+                            }}
+                          >
+                            <FormattedMessage id="actions.remove" />
+                          </Button>
+                        </span>
+                      </div>
+                      <Collapse in={editingSourceIndex === index}>
+                        <div className="mt-3">
+                          <OptionsEditor
+                            options={item.options ?? {}}
+                            setOptions={(options) =>
+                              updateSourceOptions(index, options)
+                            }
+                            source={sourceForOptions}
+                            setEditingField={(value) => setEditingField(value)}
+                            defaultOptions={getDefaultAutoIdentifyOptions()}
+                          />
+                        </div>
+                      </Collapse>
                     </ListGroup.Item>
                   );
                 })}
@@ -251,7 +363,7 @@ export const SettingsAutoIdentificationPanel: React.FC = () => {
                 </Form.Control>
                 <Button
                   variant="secondary"
-                  disabled={!newSource}
+                  disabled={!newSource || editingField}
                   onClick={addSource}
                 >
                   <FormattedMessage id="actions.add" />

@@ -226,7 +226,7 @@ func (g sceneRelationships) stashIDs(ctx context.Context, setUpdateTime bool) ([
 	// find and update the stash id if it exists
 	for i, stashID := range stashIDs {
 		if endpoint == stashID.Endpoint {
-			if g.fillMissing {
+			if g.fillMissing && strategy != FieldStrategyOverwrite {
 				return nil, nil
 			}
 			// if stashID is the same, then don't set
@@ -264,13 +264,16 @@ func (g sceneRelationships) cover(ctx context.Context) ([]byte, error) {
 	if scraped == nil || *scraped == "" {
 		return nil, nil
 	}
+	fieldStrategy := g.fieldOptions["cover_image"]
+	if fieldStrategy != nil && !shouldSetSingleValueField(fieldStrategy, false) {
+		return nil, nil
+	}
 
-	// always overwrite if present
 	existingCover, err := g.sceneReader.GetCover(ctx, g.scene.ID)
 	if err != nil {
 		logger.Errorf("Error getting scene cover: %v", err)
 	}
-	if g.fillMissing && len(existingCover) > 0 {
+	if fieldStrategy != nil && !shouldSetSingleValueField(fieldStrategy, len(existingCover) > 0) {
 		return nil, nil
 	}
 

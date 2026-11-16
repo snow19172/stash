@@ -778,15 +778,17 @@ func Test_sceneRelationships_cover(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		sceneID int
-		image   *string
-		want    []byte
-		wantErr bool
+		name         string
+		sceneID      int
+		image        *string
+		fieldOptions *FieldOptions
+		want         []byte
+		wantErr      bool
 	}{
 		{
 			"nil image",
 			sceneID,
+			nil,
 			nil,
 			nil,
 			false,
@@ -795,6 +797,7 @@ func Test_sceneRelationships_cover(t *testing.T) {
 			"different image",
 			sceneID,
 			&newDataEncoded,
+			nil,
 			newData,
 			false,
 		},
@@ -803,12 +806,14 @@ func Test_sceneRelationships_cover(t *testing.T) {
 			sceneID,
 			&existingDataEncoded,
 			nil,
+			nil,
 			false,
 		},
 		{
 			"error getting scene cover",
 			errSceneID,
 			&newDataEncoded,
+			nil,
 			newData,
 			false,
 		},
@@ -817,7 +822,32 @@ func Test_sceneRelationships_cover(t *testing.T) {
 			sceneID,
 			&invalidData,
 			nil,
+			nil,
 			true,
+		},
+		{
+			"merge preserves existing cover",
+			sceneID,
+			&newDataEncoded,
+			&FieldOptions{Strategy: FieldStrategyMerge},
+			nil,
+			false,
+		},
+		{
+			"overwrite replaces existing cover",
+			sceneID,
+			&newDataEncoded,
+			&FieldOptions{Strategy: FieldStrategyOverwrite},
+			newData,
+			false,
+		},
+		{
+			"ignore does not set cover",
+			sceneID,
+			&newDataEncoded,
+			&FieldOptions{Strategy: FieldStrategyIgnore},
+			nil,
+			false,
 		},
 	}
 	for _, tt := range tests {
@@ -825,6 +855,7 @@ func Test_sceneRelationships_cover(t *testing.T) {
 			tr.scene = &models.Scene{
 				ID: tt.sceneID,
 			}
+			tr.fieldOptions["cover_image"] = tt.fieldOptions
 			tr.result = &scrapeResult{
 				result: &models.ScrapedScene{
 					Image: tt.image,
