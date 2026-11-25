@@ -74,6 +74,9 @@ type Manager struct {
 	// generateSlots caps the tasks running across all generate jobs started by scans
 	generateSlots     chan struct{}
 	generateSlotsOnce sync.Once
+
+	fileWatcherMu sync.Mutex
+	fileWatcher   *fileWatcher
 }
 
 var instance *Manager
@@ -403,6 +406,7 @@ func (s *Manager) GetSystemStatus() *SystemStatus {
 // Shutdown gracefully stops the manager
 func (s *Manager) Shutdown() {
 	// TODO: Each part of the manager needs to gracefully stop at some point
+	s.stopFileWatcher()
 
 	if s.StreamManager != nil {
 		s.StreamManager.Shutdown()

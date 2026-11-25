@@ -23,6 +23,8 @@ var ErrInput = errors.New("invalid request input")
 type IdentifyJob struct {
 	postHookExecutor identify.SceneUpdatePostHookExecutor
 	input            identify.Options
+	MergeSources     bool
+	OnlyFillMissing  bool
 
 	stashBoxes []*models.StashBox
 	progress   *job.Progress
@@ -148,6 +150,8 @@ func (j *IdentifyJob) identifyScene(ctx context.Context, s *models.Scene, source
 			DefaultOptions:              j.input.Options,
 			Sources:                     sources,
 			SceneUpdatePostHookExecutor: j.postHookExecutor,
+			MergeSources:                j.MergeSources,
+			OnlyFillMissing:             j.OnlyFillMissing,
 		}
 
 		taskError = task.Identify(ctx, s)
@@ -275,6 +279,9 @@ func (s stashboxSource) ScrapeScenes(ctx context.Context, sceneID int) ([]*model
 		return err
 	}); err != nil {
 		return nil, fmt.Errorf("error getting scene fingerprints: %w", err)
+	}
+	if len(fps) == 0 || len(fps[0]) == 0 {
+		return nil, nil
 	}
 
 	results, err := s.FindSceneByFingerprints(ctx, fps[0])

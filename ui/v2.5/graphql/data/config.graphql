@@ -4,6 +4,20 @@ fragment ConfigGeneralData on ConfigGeneralResult {
     excludeVideo
     excludeImage
   }
+  autoIdentifyLibraries {
+    path
+    autoScan
+    autoIdentify
+    ignoreOrganizedScenes
+    sources {
+      source {
+        ...ScraperSourceData
+      }
+      options {
+        ...IdentifyMetadataOptionsData
+      }
+    }
+  }
   databasePath
   backupDirectoryPath
   deleteTrashPath

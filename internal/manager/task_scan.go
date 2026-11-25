@@ -41,6 +41,19 @@ type ScanJob struct {
 	count     int
 
 	unmatchedCaptionFiles utils.MutexField[[]string]
+	scannedVideosMu       sync.Mutex
+	scannedVideos         []scannedVideoFile
+}
+
+type scannedVideoFile struct {
+	id   models.FileID
+	path string
+}
+
+func (j *ScanJob) getScannedVideos() []scannedVideoFile {
+	j.scannedVideosMu.Lock()
+	defer j.scannedVideosMu.Unlock()
+	return append([]scannedVideoFile(nil), j.scannedVideos...)
 }
 
 func (j *ScanJob) Execute(ctx context.Context, progress *job.Progress) error {
@@ -372,6 +385,14 @@ func (j *ScanJob) handleFile(ctx context.Context, f file.ScannedFile, progress *
 	r, err := j.scanner.ScanFile(ctx, f)
 	if err != nil {
 		return err
+	}
+	if videoFile, ok := r.File.(*models.VideoFile); ok {
+		j.scannedVideosMu.Lock()
+		j.scannedVideos = append(j.scannedVideos, scannedVideoFile{
+			id:   videoFile.ID,
+			path: videoFile.Path,
+		})
+		j.scannedVideosMu.Unlock()
 	}
 
 	// if this is a new video file, match it with any unmatched caption files

@@ -19,9 +19,13 @@ var testCtx = context.Background()
 type mockSceneScraper struct {
 	errIDs  []int
 	results map[int][]*models.ScrapedScene
+	calls   *int
 }
 
 func (s mockSceneScraper) ScrapeScenes(ctx context.Context, sceneID int) ([]*models.ScrapedScene, error) {
+	if s.calls != nil {
+		(*s.calls)++
+	}
 	if slices.Contains(s.errIDs, sceneID) {
 		return nil, errors.New("scrape scene error")
 	}
@@ -32,6 +36,189 @@ type mockHookExecutor struct {
 }
 
 func (s mockHookExecutor) ExecuteSceneUpdatePostHooks(ctx context.Context, input models.SceneUpdateInput, inputFields []string) {
+}
+
+func TestMergeScrapedSceneFieldsUsesSourcePriority(t *testing.T) {
+	firstTitle := "first source title"
+	secondTitle := "second source title"
+	secondCode := "source-code"
+
+	target := &models.ScrapedScene{Title: &firstTitle}
+	mergeScrapedSceneFields(target, &models.ScrapedScene{
+		Title: &secondTitle,
+		Code:  &secondCode,
+	}, true)
+
+	assert.Equal(t, firstTitle, *target.Title)
+	assert.Equal(t, secondCode, *target.Code)
+}
+
+func TestSceneIdentifierScrapeSceneMergesSourceResultsByPriority(t *testing.T) {
+	firstTitle := "first source title"
+	secondTitle := "second source title"
+	code := "source-code"
+	sceneID := 42
+	firstCalls := 0
+	secondCalls := 0
+	firstOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyMerge},
+		},
+	}
+	secondOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "code", Strategy: FieldStrategyOverwrite},
+		},
+	}
+
+	identifier := SceneIdentifier{
+		MergeSources: true,
+		Sources: []ScraperSource{
+			{
+				Name:    "first source",
+				Options: firstOptions,
+				Scraper: mockSceneScraper{
+					calls: &firstCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &firstTitle}},
+					},
+				},
+			},
+			{
+				Name:    "second source",
+				Options: secondOptions,
+				Scraper: mockSceneScraper{
+					calls: &secondCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &secondTitle, Code: &code}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.Equal(t, firstTitle, *result.result.Title)
+	assert.Equal(t, code, *result.result.Code)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
+	assert.Equal(t, []string{"first source", "second source"}, []string{result.sources[0].Name, result.sources[1].Name})
+	assert.Equal(t, "second source", result.fieldSource["code"].Name)
+	fieldOptions := identifier.getResultFieldOptions(result)
+	assert.Equal(t, FieldStrategyMerge, fieldOptions["title"].Strategy)
+	assert.Equal(t, FieldStrategyOverwrite, fieldOptions["code"].Strategy)
+}
+
+func TestSceneIdentifierMergeSourcesContinuesAfterMultipleMatches(t *testing.T) {
+	sceneID := 42
+	firstCalls := 0
+	secondCalls := 0
+	skipMultipleMatches := true
+	firstTitle := "ambiguous source title"
+	secondTitle := "fallback source title"
+
+	identifier := SceneIdentifier{
+		MergeSources:   true,
+		DefaultOptions: &MetadataOptions{SkipMultipleMatches: &skipMultipleMatches},
+		Sources: []ScraperSource{
+			{
+				Name: "ambiguous source",
+				Scraper: mockSceneScraper{
+					calls: &firstCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &firstTitle}, {Title: &firstTitle}},
+					},
+				},
+			},
+			{
+				Name: "fallback source",
+				Scraper: mockSceneScraper{
+					calls: &secondCalls,
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &secondTitle}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, secondTitle, *result.result.Title)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
+	assert.Equal(t, []string{"fallback source"}, []string{result.source.Name})
+}
+
+func TestSceneIdentifierUsesPerSourceFieldOptionsBeforeDefaults(t *testing.T) {
+	firstSourceOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyIgnore},
+		},
+	}
+	secondSourceOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "code", Strategy: FieldStrategyOverwrite},
+		},
+	}
+	defaultOptions := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyMerge},
+			{Field: "code", Strategy: FieldStrategyMerge},
+		},
+	}
+	identifier := SceneIdentifier{DefaultOptions: defaultOptions}
+
+	got := identifier.getResultFieldOptions(&scrapeResult{
+		source: ScraperSource{Options: firstSourceOptions},
+		fieldSource: map[string]ScraperSource{
+			"title": {Options: firstSourceOptions},
+			"code":  {Options: secondSourceOptions},
+		},
+	})
+
+	assert.Equal(t, FieldStrategyIgnore, got["title"].Strategy)
+	assert.Equal(t, FieldStrategyOverwrite, got["code"].Strategy)
+}
+
+func TestSceneIdentifierMergeSourcesSkipsIgnoredFields(t *testing.T) {
+	sceneID := 42
+	ignoredTitle := "ignored source title"
+	fallbackTitle := "fallback source title"
+	ignoreTitle := &MetadataOptions{
+		FieldOptions: []*FieldOptions{
+			{Field: "title", Strategy: FieldStrategyIgnore},
+		},
+	}
+	identifier := SceneIdentifier{
+		MergeSources: true,
+		Sources: []ScraperSource{
+			{
+				Name:    "ignored source",
+				Options: ignoreTitle,
+				Scraper: mockSceneScraper{
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &ignoredTitle}},
+					},
+				},
+			},
+			{
+				Name: "fallback source",
+				Scraper: mockSceneScraper{
+					results: map[int][]*models.ScrapedScene{
+						sceneID: {{Title: &fallbackTitle}},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := identifier.scrapeScene(testCtx, &models.Scene{ID: sceneID})
+	assert.NoError(t, err)
+	assert.Equal(t, fallbackTitle, *result.result.Title)
+	assert.Equal(t, "fallback source", result.fieldSource["title"].Name)
 }
 
 func TestSceneIdentifier_Identify(t *testing.T) {

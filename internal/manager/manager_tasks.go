@@ -217,12 +217,17 @@ func (s *Manager) Scan(ctx context.Context, input ScanMetadataInput) (int, error
 	}
 
 	scanner := s.makeScanner(input.Rescan, minModTime)
+	autoIdentifyTargets := s.autoIdentifyScanTargets(input.Paths)
 
 	// we want the generate task to run concurrently, but it shouldn't be created first
 	jobID := s.JobManager.Add(ctx, "Scanning...", job.MakeJobExec(func(ctx context.Context, progress *job.Progress) error {
 		taskQueue := s.startGenerateJob(ctx, "Generating for scanned files...")
-		// close in defer so the generate job still finishes if the scan panics
-		defer taskQueue.Close()
+		queueClosed := false
+		defer func() {
+			if !queueClosed {
+				taskQueue.Close()
+			}
+		}()
 
 		scanJob := ScanJob{
 			scanner:         scanner,
@@ -234,8 +239,18 @@ func (s *Manager) Scan(ctx context.Context, input ScanMetadataInput) (int, error
 
 		// scan job does not return error
 		_ = scanJob.Execute(ctx, progress)
+		scannedVideos := scanJob.getScannedVideos()
+		if len(autoIdentifyTargets) == 0 || len(scannedVideos) == 0 || job.IsCancelled(ctx) {
+			return nil
+		}
 
-		return nil
+		taskQueue.Close()
+		queueClosed = true
+		if input.ScanGeneratePhashes {
+			taskQueue.Wait()
+		}
+		return s.identifyScannedVideos(ctx, progress, scannedVideos, autoIdentifyTargets)
+
 	}))
 
 	return jobID, nil

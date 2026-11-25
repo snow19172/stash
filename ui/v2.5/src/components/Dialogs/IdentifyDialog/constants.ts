@@ -15,6 +15,7 @@ export const sceneFields = [
   "production_date",
   "director",
   "details",
+  "cover_image",
   "url",
   "studio",
   "performers",

@@ -80,6 +80,7 @@ func makeConfigGeneralResult() *ConfigGeneralResult {
 
 	return &ConfigGeneralResult{
 		Stashes:                       config.GetStashPaths(),
+		AutoIdentifyLibraries:         config.GetAutoIdentifyLibraries(),
 		DatabasePath:                  config.GetDatabasePath(),
 		BackupDirectoryPath:           config.GetBackupDirectoryPath(),
 		DeleteTrashPath:               config.GetDeleteTrashPath(),

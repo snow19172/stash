@@ -16,6 +16,7 @@ import { SettingsToolsPanel } from "./SettingsToolsPanel";
 import { SettingsServicesPanel } from "./SettingsServicesPanel";
 import { SettingsContext, useSettings } from "./context";
 import { SettingsLibraryPanel } from "./SettingsLibraryPanel";
+import { SettingsAutoIdentificationPanel } from "./SettingsAutoIdentificationPanel";
 import { SettingsSecurityPanel } from "./SettingsSecurityPanel";
 import Changelog from "../Changelog/Changelog";
 import { TroubleshootingModeButton } from "../TroubleshootingMode/TroubleshootingModeButton";
@@ -24,6 +25,7 @@ import { useTroubleshootingMode } from "../TroubleshootingMode/useTroubleshootin
 const validTabs = [
   "tasks",
   "library",
+  "auto-identification",
   "interface",
   "security",
   "metadata-providers",
@@ -66,6 +68,13 @@ const SettingTabs: React.FC<{ tab: TabKey }> = ({ tab }) => {
               <LinkContainer to="/settings?tab=library">
                 <Nav.Link eventKey="library">
                   <FormattedMessage id="library" />
+                </Nav.Link>
+              </LinkContainer>
+            </Nav.Item>
+            <Nav.Item>
+              <LinkContainer to="/settings?tab=auto-identification">
+                <Nav.Link eventKey="auto-identification">
+                  <FormattedMessage id="config.library.auto_scan_identify" />
                 </Nav.Link>
               </LinkContainer>
             </Nav.Item>
@@ -164,6 +173,9 @@ const SettingTabs: React.FC<{ tab: TabKey }> = ({ tab }) => {
           <Tab.Content className="mx-auto">
             <Tab.Pane eventKey="library">
               <SettingsLibraryPanel />
+            </Tab.Pane>
+            <Tab.Pane eventKey="auto-identification">
+              <SettingsAutoIdentificationPanel />
             </Tab.Pane>
             <Tab.Pane eventKey="interface">
               <SettingsInterfacePanel />

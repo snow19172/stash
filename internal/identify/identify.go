@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/stashapp/stash/pkg/logger"
 	"github.com/stashapp/stash/pkg/models"
@@ -55,6 +56,8 @@ type SceneIdentifier struct {
 	DefaultOptions              *MetadataOptions
 	Sources                     []ScraperSource
 	SceneUpdatePostHookExecutor SceneUpdatePostHookExecutor
+	MergeSources                bool
+	OnlyFillMissing             bool
 }
 
 func (t *SceneIdentifier) Identify(ctx context.Context, scene *models.Scene) error {
@@ -95,19 +98,82 @@ func (t *SceneIdentifier) Identify(ctx context.Context, scene *models.Scene) err
 }
 
 type scrapeResult struct {
-	result *models.ScrapedScene
-	source ScraperSource
+	result      *models.ScrapedScene
+	source      ScraperSource
+	sources     []ScraperSource
+	fieldSource map[string]ScraperSource
 }
 
 func (t *SceneIdentifier) scrapeScene(ctx context.Context, scene *models.Scene) (*scrapeResult, error) {
+	if t.MergeSources {
+		var combined *scrapeResult
+		var multipleMatchErr *MultipleMatchesFoundError
+		for _, source := range t.Sources {
+			results, err := source.Scraper.ScrapeScenes(ctx, scene.ID)
+			if err != nil {
+				logger.Errorf("error scraping from identification source %q: %v", source.Name, err)
+				continue
+			}
+			logger.Debugf("Identification source %q returned %d results for %s", source.Name, len(results), scene.Path)
+			if len(results) == 0 {
+				continue
+			}
+			if results[0] == nil {
+				continue
+			}
+			options := t.getOptions(source)
+			if len(results) > 1 && utils.IsTrue(options.SkipMultipleMatches) {
+				if multipleMatchErr == nil {
+					multipleMatchErr = &MultipleMatchesFoundError{Source: source}
+				}
+				continue
+			}
+			scraped := ignoreScrapedSceneFields(results[0], source)
+			if combined == nil {
+				fieldSources := make(map[string]ScraperSource)
+				for _, field := range scrapedSceneFields {
+					if hasScrapedSceneField(scraped, field) {
+						fieldSources[field] = source
+					}
+				}
+				combined = &scrapeResult{
+					result:      scraped,
+					source:      source,
+					sources:     []ScraperSource{source},
+					fieldSource: fieldSources,
+				}
+				continue
+			}
+			combined.sources = append(combined.sources, source)
+			if combined.fieldSource == nil {
+				combined.fieldSource = make(map[string]ScraperSource)
+			}
+			missingFields := make(map[string]bool)
+			for _, field := range scrapedSceneFields {
+				missingFields[field] = !hasScrapedSceneField(combined.result, field) && hasScrapedSceneField(scraped, field)
+			}
+			mergeScrapedSceneFields(combined.result, scraped, combined.source.RemoteSite == source.RemoteSite)
+			for field, wasMissing := range missingFields {
+				if wasMissing && hasScrapedSceneField(combined.result, field) {
+					combined.fieldSource[field] = source
+				}
+			}
+		}
+		if combined == nil {
+			return nil, multipleMatchErr
+		}
+		return combined, nil
+	}
+
 	// iterate through the input sources
 	for _, source := range t.Sources {
 		// scrape using the source
 		results, err := source.Scraper.ScrapeScenes(ctx, scene.ID)
 		if err != nil {
-			logger.Errorf("error scraping from %v: %v", source.Scraper, err)
+			logger.Errorf("error scraping from identification source %q: %v", source.Name, err)
 			continue
 		}
+		logger.Debugf("Identification source %q returned %d results for %s", source.Name, len(results), scene.Path)
 
 		if len(results) > 0 {
 			options := t.getOptions(source)
@@ -118,14 +184,190 @@ func (t *SceneIdentifier) scrapeScene(ctx context.Context, scene *models.Scene) 
 			} else {
 				// if results were found then return
 				return &scrapeResult{
-					result: results[0],
-					source: source,
+					result:      results[0],
+					source:      source,
+					sources:     []ScraperSource{source},
+					fieldSource: scrapedSceneFieldSources(results[0], source),
 				}, nil
 			}
 		}
 	}
 
 	return nil, nil
+}
+
+var scrapedSceneFields = []string{
+	"title", "code", "date", "production_date", "director", "details",
+	"cover_image", "url", "studio", "performers", "tags", "stash_ids",
+}
+
+func scrapedSceneFieldSources(scraped *models.ScrapedScene, source ScraperSource) map[string]ScraperSource {
+	ret := make(map[string]ScraperSource)
+	for _, field := range scrapedSceneFields {
+		if hasScrapedSceneField(scraped, field) {
+			ret[field] = source
+		}
+	}
+	return ret
+}
+
+func hasScrapedSceneField(scraped *models.ScrapedScene, field string) bool {
+	if scraped == nil {
+		return false
+	}
+	switch field {
+	case "title":
+		return scraped.Title != nil && *scraped.Title != ""
+	case "code":
+		return scraped.Code != nil && *scraped.Code != ""
+	case "date":
+		return scraped.Date != nil && *scraped.Date != ""
+	case "production_date":
+		return scraped.ProductionDate != nil && *scraped.ProductionDate != ""
+	case "director":
+		return scraped.Director != nil && *scraped.Director != ""
+	case "details":
+		return scraped.Details != nil && *scraped.Details != ""
+	case "cover_image":
+		return scraped.Image != nil && *scraped.Image != ""
+	case "url":
+		return (scraped.URL != nil && *scraped.URL != "") || len(scraped.URLs) > 0
+	case "studio":
+		return scraped.Studio != nil
+	case "performers":
+		return len(scraped.Performers) > 0
+	case "tags":
+		return len(scraped.Tags) > 0
+	case "stash_ids":
+		return scraped.RemoteSiteID != nil
+	default:
+		return false
+	}
+}
+
+func ignoreScrapedSceneFields(scraped *models.ScrapedScene, source ScraperSource) *models.ScrapedScene {
+	if source.Options == nil {
+		return scraped
+	}
+
+	ret := *scraped
+	for _, fieldOption := range source.Options.FieldOptions {
+		if fieldOption == nil || fieldOption.Strategy != FieldStrategyIgnore {
+			continue
+		}
+		switch fieldOption.Field {
+		case "title":
+			ret.Title = nil
+		case "code":
+			ret.Code = nil
+		case "date":
+			ret.Date = nil
+		case "production_date":
+			ret.ProductionDate = nil
+		case "director":
+			ret.Director = nil
+		case "details":
+			ret.Details = nil
+		case "cover_image":
+			ret.Image = nil
+		case "url":
+			ret.URL = nil
+			ret.URLs = nil
+		case "studio":
+			ret.Studio = nil
+		case "performers":
+			ret.Performers = nil
+		case "tags":
+			ret.Tags = nil
+		case "stash_ids":
+			ret.RemoteSiteID = nil
+		}
+	}
+	return &ret
+}
+
+func mergeScrapedSceneFields(target, source *models.ScrapedScene, mergeRelationships bool) {
+	if target.Title == nil || *target.Title == "" {
+		target.Title = source.Title
+	}
+	if target.Code == nil || *target.Code == "" {
+		target.Code = source.Code
+	}
+	if target.Details == nil || *target.Details == "" {
+		target.Details = source.Details
+	}
+	if target.Director == nil || *target.Director == "" {
+		target.Director = source.Director
+	}
+	if target.URL == nil || *target.URL == "" {
+		target.URL = source.URL
+	}
+	if len(target.URLs) == 0 {
+		target.URLs = source.URLs
+	}
+	if target.Date == nil || *target.Date == "" {
+		target.Date = source.Date
+	}
+	if target.ProductionDate == nil || *target.ProductionDate == "" {
+		target.ProductionDate = source.ProductionDate
+	}
+	if target.Duration == nil {
+		target.Duration = source.Duration
+	}
+	if target.Image == nil || *target.Image == "" {
+		target.Image = source.Image
+	}
+	if !mergeRelationships {
+		return
+	}
+	if target.Studio == nil && (mergeRelationships || source.Studio == nil || source.Studio.StoredID != nil) {
+		target.Studio = source.Studio
+	}
+	if len(target.Tags) == 0 && (mergeRelationships || hasStoredTagIDs(source.Tags)) {
+		target.Tags = source.Tags
+	}
+	if len(target.Performers) == 0 && (mergeRelationships || hasStoredPerformerIDs(source.Performers)) {
+		target.Performers = source.Performers
+	}
+	if len(target.Groups) == 0 && mergeRelationships {
+		target.Groups = source.Groups
+	}
+	if len(target.Movies) == 0 && mergeRelationships {
+		target.Movies = source.Movies
+	}
+	if target.RemoteSiteID == nil && mergeRelationships {
+		target.RemoteSiteID = source.RemoteSiteID
+	}
+	if target.File == nil && mergeRelationships {
+		target.File = source.File
+	}
+	if len(target.Fingerprints) == 0 && mergeRelationships {
+		target.Fingerprints = source.Fingerprints
+	}
+}
+
+func hasStoredTagIDs(tags []*models.ScrapedTag) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	for _, tag := range tags {
+		if tag == nil || tag.StoredID == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func hasStoredPerformerIDs(performers []*models.ScrapedPerformer) bool {
+	if len(performers) == 0 {
+		return false
+	}
+	for _, performer := range performers {
+		if performer == nil || performer.StoredID == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Returns a MetadataOptions object with any default options overwritten by source specific options
@@ -171,16 +413,10 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 		ID: s.ID,
 	}
 
-	allOptions := []MetadataOptions{}
-	if result.source.Options != nil {
-		allOptions = append(allOptions, *result.source.Options)
-	}
-	if t.DefaultOptions != nil {
-		allOptions = append(allOptions, *t.DefaultOptions)
-	}
-
-	fieldOptions := getFieldOptions(allOptions)
+	fieldOptions := t.getResultFieldOptions(result)
 	options := t.getOptions(result.source)
+	performerOptions := t.getOptions(t.sourceForField(result, "performers"))
+	coverOptions := t.getOptions(t.sourceForField(result, "cover_image"))
 
 	scraped := result.result
 
@@ -192,7 +428,8 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 		scene:                    s,
 		result:                   result,
 		fieldOptions:             fieldOptions,
-		skipSingleNamePerformers: utils.IsTrue(options.SkipSingleNamePerformers),
+		skipSingleNamePerformers: utils.IsTrue(performerOptions.SkipSingleNamePerformers),
+		fillMissing:              t.OnlyFillMissing,
 	}
 
 	setOrganized := utils.IsTrue(options.SetOrganized)
@@ -209,10 +446,10 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 
 	// Determine allowed genders for performer filtering
 	var allowedGenders []models.GenderEnum
-	if len(options.PerformerGenders) > 0 {
+	if len(performerOptions.PerformerGenders) > 0 {
 		// New field takes precedence
-		allowedGenders = options.PerformerGenders
-	} else if options.IncludeMalePerformers != nil && !*options.IncludeMalePerformers {
+		allowedGenders = performerOptions.PerformerGenders
+	} else if performerOptions.IncludeMalePerformers != nil && !*performerOptions.IncludeMalePerformers {
 		// Legacy: if includeMalePerformers is false, include all genders except male
 		for _, g := range models.AllGenderEnum {
 			if g != models.GenderEnumMale {
@@ -242,10 +479,10 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 	if err != nil {
 		return nil, err
 	}
-	if addSkipSingleNamePerformerTag && options.SkipSingleNamePerformerTag != nil {
-		tagID, err := strconv.ParseInt(*options.SkipSingleNamePerformerTag, 10, 64)
+	if addSkipSingleNamePerformerTag && performerOptions.SkipSingleNamePerformerTag != nil {
+		tagID, err := strconv.ParseInt(*performerOptions.SkipSingleNamePerformerTag, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("error converting tag ID %s: %w", *options.SkipSingleNamePerformerTag, err)
+			return nil, fmt.Errorf("error converting tag ID %s: %w", *performerOptions.SkipSingleNamePerformerTag, err)
 		}
 
 		tagIDs = sliceutil.AppendUnique(tagIDs, int(tagID))
@@ -258,7 +495,7 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 	}
 
 	// SetCoverImage defaults to true if unset
-	if options.SetCoverImage == nil || *options.SetCoverImage {
+	if coverOptions.SetCoverImage == nil || *coverOptions.SetCoverImage {
 		ret.CoverImage, err = rel.cover(ctx)
 		if err != nil {
 			return nil, err
@@ -280,6 +517,47 @@ func (t *SceneIdentifier) getSceneUpdater(ctx context.Context, s *models.Scene, 
 	}
 
 	return ret, nil
+}
+
+func (t *SceneIdentifier) getResultFieldOptions(result *scrapeResult) map[string]*FieldOptions {
+	if len(result.fieldSource) > 0 {
+		ret := make(map[string]*FieldOptions, len(result.fieldSource))
+		for field, source := range result.fieldSource {
+			sourceOptions := []MetadataOptions{}
+			if source.Options != nil {
+				sourceOptions = append(sourceOptions, *source.Options)
+			}
+			if t.DefaultOptions != nil {
+				sourceOptions = append(sourceOptions, *t.DefaultOptions)
+			}
+			if option := getFieldOptions(sourceOptions)[field]; option != nil {
+				ret[field] = option
+			}
+		}
+		return ret
+	}
+
+	allOptions := []MetadataOptions{}
+	for _, source := range result.sources {
+		if source.Options != nil {
+			allOptions = append(allOptions, *source.Options)
+		}
+	}
+	if len(allOptions) == 0 && result.source.Options != nil {
+		allOptions = append(allOptions, *result.source.Options)
+	}
+	if t.DefaultOptions != nil {
+		allOptions = append(allOptions, *t.DefaultOptions)
+	}
+
+	return getFieldOptions(allOptions)
+}
+
+func (t *SceneIdentifier) sourceForField(result *scrapeResult, field string) ScraperSource {
+	if source, ok := result.fieldSource[field]; ok {
+		return source
+	}
+	return result.source
 }
 
 func (t *SceneIdentifier) modifyScene(ctx context.Context, s *models.Scene, result *scrapeResult) error {
@@ -320,7 +598,14 @@ func (t *SceneIdentifier) modifyScene(ctx context.Context, s *models.Scene, resu
 		if title.Ptr() != nil {
 			as = fmt.Sprintf(" as %s", title.Value)
 		}
-		logger.Infof("Successfully identified %s%s using %s", s.Path, as, result.source.Name)
+		sourceNames := make([]string, 0, len(result.sources))
+		for _, source := range result.sources {
+			sourceNames = append(sourceNames, source.Name)
+		}
+		if len(sourceNames) == 0 {
+			sourceNames = append(sourceNames, result.source.Name)
+		}
+		logger.Infof("Successfully identified %s%s using %s", s.Path, as, strings.Join(sourceNames, ", "))
 
 		return nil
 	}); err != nil {
